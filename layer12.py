@@ -10,28 +10,17 @@ END_DATE   = datetime(2025, 8, 16)
 
 OUTPUT_DIR = r"C:\Users\Administrator\Desktop\論文\cryptodata"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-OUT_XLSX = os.path.join(OUTPUT_DIR, "eventday_top100final_timeseries.xlsx")
+OUT_XLSX = os.path.join(OUTPUT_DIR, "eventday_layer12_timeseries.xlsx")
 
 # === 事件日 Top100 幣 IDs ===
 coin_ids = [
-    "bitcoin", "ethereum", "ripple", "tether", "binancecoin", "solana", "usd-coin",
-    "dogecoin", "tron", "cardano", "stellar", "hyperliquid", "sui", "chainlink",
-    "hedera-hashgraph", "bitcoin-cash", "avalanche-2", "shiba-inu", "leo-token",
-    "the-open-network", "litecoin", "usds", "whitebit", "polkadot", "monero", "pepe",
-    "ethena-usde", "bitget-token", "uniswap", "aave", "bittensor", "crypto-com-chain",
-    "dai", "near", "aptos", "pi-network", "ondo-finance", "ethereum-classic",
-    "internet-computer", "okb", "algorand", "bonk", "mantle", "kaspa", "ethena",
-    "arbitrum", "vechain", "cosmos", "usd1-wlfi", "render-token",
-    "polygon-ecosystem-token", "sei-network", "fetch-ai", "official-trump",
-    "fasttoken", "worldcoin-wld", "pudgy-penguins", "gatechain-token", "filecoin",
-    "susds", "pump-fun", "spx6900", "sky", "quant-network", "jupiter-exchange-solana",
-    "jupiter-perpetuals-liquidity-provider-token", "kucoin-shares", "flare-networks",
-    "first-digital-usd", "usdtb", "fartcoin", "celestia", "injective-protocol",
-    "curve-dao-token", "nexo", "blockstack", "story-2", "floki", "optimism", "sonic-3",
-    "virtual-protocol", "dogwifcoin", "immutable-x", "the-graph", "kaia", "iota",
-    "lido-dao", "pax-gold", "ethereum-name-service", "pancakeswap-token", "vaulta",
-    "syrupusdc", "paypal-usd", "theta-token", "gala", "jasmycoin", "tether-gold",
-    "the-sandbox", "aerodrome-finance", "raydium"
+    "bitcoin", "ethereum", "ripple", "binancecoin", "solana",
+    "tron", "cardano", "stellar", "sui", "hedera-hashgraph",
+    "bitcoin-cash", "avalanche-2", "the-open-network", "litecoin", "polkadot",
+    "monero", "near", "aptos", "pi-network", "ethereum-classic",
+    "internet-computer", "okb", "algorand", "mantle", "kaspa",
+    "arbitrum", "vechain", "cosmos", "celestia", "iota",
+    "neo", "kaia", "story-2", "worldcoin-wld", "theta-token"
 ]
 
 # === 基本工具 ===
@@ -104,15 +93,3 @@ with pd.ExcelWriter(OUT_XLSX, engine="openpyxl") as writer:
     data.to_excel(writer, index=False, sheet_name="data")
 
 print("完成，已輸出：", OUT_XLSX)
-
-# # 讀取你剛剛輸出的 Excel
-# df = pd.read_excel(r"C:\Users\Administrator\Desktop\論文\cryptodata\eventday_top100final_timeseries.xlsx")
-#
-# # 確保按日期排序
-# df = df.sort_values(["coin_id", "date"])
-# # 計算對數報酬
-# df["log_return"] = df.groupby("coin_id")["price"].apply(lambda x: np.log(x / x.shift(1)))
-#
-# # 檢查 BTC (市場指數)
-# btc_df = df[df["coin_id"]=="bitcoin"][["date","log_return"]].rename(columns={"log_return":"mkt_return"})
-# print(btc_df.head())

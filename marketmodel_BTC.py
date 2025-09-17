@@ -2,8 +2,10 @@ import pandas as pd
 import numpy as np
 
 # 讀取你剛剛輸出的 Excel
-df = pd.read_excel(r"C:\Users\Administrator\Desktop\論文\cryptodata\eventday_top200_timeseries.xlsx")
+df = pd.read_excel(r"C:\Users\Administrator\Desktop\論文\cryptodata\eventday_top100final_timeseries.xlsx")
 
+# 日期往前平移一天，確保符合收盤價定義
+df["date"] = pd.to_datetime(df["date"]) - pd.Timedelta(days=1)
 # 確保按日期排序
 df = df.sort_values(["coin_id", "date"])
 
@@ -77,24 +79,64 @@ for day, group in ar_df.groupby("rel_day"):
     })
 
 daily_t_df = pd.DataFrame(daily_t_results).sort_values("rel_day")
-daily_t_df.to_excel(r"C:\Users\Administrator\Desktop\論文\cryptodata\Daily_AR_ttest.xlsx", index=False)
+daily_t_df.to_excel(r"C:\Users\Administrator\Desktop\論文\cryptodata\Daily_AR_ttest3.xlsx", index=False)
 
-windows = [(-1, 1), (-3, 3), (-5, 5), (0, 1), (0, 3), (0, 5), (-10, 10), (-10, 30)]
-car_results = []
+# windows = [(-1, 1), (-3, 3), (-5, 5), (0, 1), (0, 3), (0, 5), (-10, 10), (-10, 30)]
+window = (-10, 10)
+caar_results = []
 
-for (a, b) in windows:
+ # for (a, b) in windows:
+ #    car_list = []
+ #    for coin, group in ar_df.groupby("coin"):
+ #        car_val = group[(group["rel_day"] >= a) & (group["rel_day"] <= b)]["AR"].sum()
+ #        car_list.append(car_val)
+ #
+ #    t_stat, p_value = stats.ttest_1samp(car_list, popmean=0, nan_policy="omit")
+ #    car_results.append({
+ #        "window": f"[{a},{b}]",
+ #        "mean_CAR": np.mean(car_list),
+ #        "t_stat": t_stat,
+ #        "p_value": p_value
+ #    })
+# 先算每天的 AAR
+aar_df = (
+    ar_df[(ar_df["rel_day"] >= window[0]) & (ar_df["rel_day"] <= window[1])]
+    .groupby("rel_day")["AR"]
+    .mean()
+    .reset_index()
+    .rename(columns={"AR": "AAR"})
+)
+# 依序累積得到 CAAR
+aar_df["CAAR"] = aar_df["AAR"].cumsum()
+
+# 對每天的 CAR 做 t 檢定 (這裡的 CAR 是到當天的累積)
+for day in aar_df["rel_day"]:
     car_list = []
     for coin, group in ar_df.groupby("coin"):
-        car_val = group[(group["rel_day"] >= a) & (group["rel_day"] <= b)]["AR"].sum()
+        car_val = group[(group["rel_day"] >= window[0]) & (group["rel_day"] <= day)]["AR"].sum()
         car_list.append(car_val)
 
     t_stat, p_value = stats.ttest_1samp(car_list, popmean=0, nan_policy="omit")
-    car_results.append({
-        "window": f"[{a},{b}]",
-        "mean_CAR": np.mean(car_list),
+    caar_results.append({
+        "rel_day": day,
+        "AAR": aar_df.loc[aar_df["rel_day"]==day, "AAR"].values[0],
+        "CAAR": aar_df.loc[aar_df["rel_day"]==day, "CAAR"].values[0],
         "t_stat": t_stat,
         "p_value": p_value
     })
 
-car_df = pd.DataFrame(car_results)
-car_df.to_excel(r"C:\Users\Administrator\Desktop\論文\cryptodata\CAR_ttest.xlsx", index=False)
+# 轉成 DataFrame
+caar_df = pd.DataFrame(caar_results)
+
+# === 輸出 Excel，覆蓋到 CAR_ttest.xlsx ===
+caar_df.to_excel(r"C:\Users\Administrator\Desktop\論文\cryptodata\CAR_ttest3.xlsx", index=False)
+
+# car_df = pd.DataFrame(car_results)
+# car_df.to_excel(r"C:\Users\Administrator\Desktop\論文\cryptodata\CAR_ttest.xlsx", index=False)
+
+# === 事件日前後檢查輸出 ===
+check_window = (-3, 3)
+check_df = caar_df[(caar_df["rel_day"] >= check_window[0]) & (caar_df["rel_day"] <= check_window[1])]
+
+print("\n=== 事件日前後 3 天檢查 (AAR / CAAR / t-test) ===")
+print(check_df.to_string(index=False))
