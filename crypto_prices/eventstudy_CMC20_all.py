@@ -7,90 +7,58 @@ from datetime import datetime, timedelta
 # === 基本設定 ===
 INPUT_DIR = r"C:\Users\Administrator\Desktop\論文\crypto_data2"
 INPUT_XLSX = f"{INPUT_DIR}/historical_data_2025-07-17_2.xlsx"
+CMC20_XLSX = r"C:\Users\Administrator\Desktop\論文\cryptodata\CMC20.xlsx"  # CMC20 指數檔案
 OUTPUT_DIR = INPUT_DIR
-AAR_CAAR_XLSX = f"{OUTPUT_DIR}/AAR_CAAR_results_2025-07-17.xlsx"
-CHECK_WINDOW_XLSX = f"{OUTPUT_DIR}/AAR_CAAR_check_window_2025-07-17.xlsx"
+AAR_CAAR_XLSX = f"{OUTPUT_DIR}/AAR_CAAR_results_2025-07-17_all_no_stablecoins_CMC20.xlsx"
+CHECK_WINDOW_XLSX = f"{OUTPUT_DIR}/AAR_CAAR_check_window_2025-07-17_all_no_stablecoins_CMC20.xlsx"
 EVENT_DATE = pd.to_datetime("2025-07-17")
 
-# === 讀取數據 ===
+# === 讀取加密貨幣數據 ===
 df = pd.read_excel(INPUT_XLSX)
 df["date"] = pd.to_datetime(df["date"])
-
-# 日期平移：CoinGecko 的 7/18 00:00:00 視為 7/17 23:59:59 收盤價
-df["date"] = df["date"] - timedelta(days=1)
-
-# 確保按 coin_id 和 date 排序
+df["date"] = df["date"] - timedelta(days=1)  # CoinGecko 收盤日對齊
 df = df.sort_values(["coin_id", "date"])
-
-# 加上相對天數
 df["rel_day"] = (df["date"] - EVENT_DATE).dt.days
 
-# 提取 BTC 作為市場指數
-btc_df = df[df["coin_id"] == "bitcoin"][["date", "log_return"]].rename(columns={"log_return": "market_return"})
-print("\nBTC 市場指數 (最近 5 天):")
-print(btc_df.tail())
+# 排除穩定幣分類
+df = df[df["classification"] != "5. 穩定幣"]
+print(f"\n排除 '5. 穩定幣' 後，剩餘 {df['coin_id'].nunique()} 個幣種")
 
-# === 事件研究法 ===
-def run_market_model(coin_df, btc_df, estimation_start=-150, estimation_end=-11, event_start=-10, event_end=10):
-    # 合併幣種數據與 BTC 市場報酬
+# === 讀取 CMC20 指數 ===
+cmc = pd.read_excel(CMC20_XLSX)
+cmc["date"] = pd.to_datetime(cmc["date"]) - pd.Timedelta(days=1)
+cmc = cmc.rename(columns={"log_return": "mkt_return"})[["date", "mkt_return"]]
+print("\nCMC20 市場指數 (最近 5 天):")
+print(cmc.tail())
+
+# === 事件研究法函數 ===
+def run_market_model(coin_df, cmc_df, estimation_start=-150, estimation_end=-11, event_start=-10, event_end=10):
     tmp = coin_df[["date", "log_return", "rel_day"]].rename(columns={"log_return": "ret"})
-    tmp = tmp.merge(btc_df, on="date", how="inner")
+    tmp = tmp.merge(cmc_df, on="date", how="inner")
 
-    # 估計期 (-150 到 -11)
     est_df = tmp[(tmp["rel_day"] >= estimation_start) & (tmp["rel_day"] <= estimation_end)].dropna()
-    if est_df.empty or len(est_df) < 30:  # 至少需要 30 天數據以確保回歸穩定
+    if est_df.empty or len(est_df) < 30:
         return None, "Insufficient estimation data"
 
-    # 市場模型回歸
-    X = sm.add_constant(est_df["market_return"])
+    X = sm.add_constant(est_df["mkt_return"])
     Y = est_df["ret"]
     try:
         model = sm.OLS(Y, X).fit()
-        alpha, beta = model.params["const"], model.params["market_return"]
+        alpha, beta = model.params["const"], model.params["mkt_return"]
     except Exception as e:
         return None, f"Regression failed: {str(e)}"
 
-    # 事件期 (-10 到 +10)
     evt_df = tmp[(tmp["rel_day"] >= event_start) & (tmp["rel_day"] <= event_end)].copy()
     if evt_df.empty:
         return None, "Empty event data"
 
-    # 計算預期報酬和異常報酬
-    evt_df["expected_ret"] = alpha + beta * evt_df["market_return"]
+    evt_df["expected_ret"] = alpha + beta * evt_df["mkt_return"]
     evt_df["AR"] = evt_df["ret"] - evt_df["expected_ret"]
 
     return evt_df, None
 
-# === 主程式 ===
-ar_all = []
-excluded_coins = []
-
-for coin_id in df["coin_id"].unique():
-    if coin_id == "bitcoin":  # 跳過 BTC
-        continue
-
-    print(f"Processing coin: {coin_id}")
-    coin_df = df[df["coin_id"] == coin_id]
-    evt_df, reason = run_market_model(coin_df, btc_df)
-
-    if evt_df is None:
-        coin_info = df[df["coin_id"] == coin_id][["coin_id", "symbol", "name"]].iloc[0]
-        excluded_coins.append({
-            "coin_id": coin_info["coin_id"],
-            "symbol": coin_info["symbol"],
-            "name": coin_info["name"],
-            "reason": reason
-        })
-        continue
-
-    evt_df["coin_id"] = coin_id
-    ar_all.append(evt_df)
-
-# 合併所有 AR
-if ar_all:
-    ar_df = pd.concat(ar_all, ignore_index=True)
-
-    # === 計算 AAR 和 CAAR ===
+# === 計算 AAR / CAAR ===
+def compute_aar_caar(ar_df):
     aar_df = (
         ar_df[(ar_df["rel_day"] >= -10) & (ar_df["rel_day"] <= 10)]
         .groupby("rel_day")["AR"]
@@ -100,14 +68,11 @@ if ar_all:
     )
     aar_df["CAAR"] = aar_df["AAR"].cumsum()
 
-    # === 對 AAR 和 CAAR 進行 t 檢定 ===
     results = []
     for day in aar_df["rel_day"]:
-        # AAR t 檢定
         ar_group = ar_df[ar_df["rel_day"] == day]["AR"]
         aar_t_stat, aar_p_value = stats.ttest_1samp(ar_group, popmean=0, nan_policy="omit")
 
-        # CAR t 檢定
         car_list = []
         for coin, group in ar_df.groupby("coin_id"):
             car_val = group[(group["rel_day"] >= -10) & (group["rel_day"] <= day)]["AR"].sum()
@@ -124,25 +89,47 @@ if ar_all:
             "CAAR_p_value": caar_p_value
         })
 
-    # 轉為 DataFrame 並儲存
     results_df = pd.DataFrame(results).sort_values("rel_day")
-    results_df.to_excel(AAR_CAAR_XLSX, index=False)
-    print(f"\nAAR 和 CAAR 結果已儲存至 {AAR_CAAR_XLSX}")
+    check_df = results_df[(results_df["rel_day"] >= -3) & (results_df["rel_day"] <= 3)]
+    return results_df, check_df
 
-    # === 事件日前後 3 天檢查 ===
-    check_window = (-3, 3)
-    check_df = results_df[(results_df["rel_day"] >= check_window[0]) & (results_df["rel_day"] <= check_window[1])]
+# === 主程式 ===
+ar_all = []
+excluded_coins = []
+
+for coin_id in df["coin_id"].unique():
+    print(f"Processing coin: {coin_id}")
+    coin_df = df[df["coin_id"] == coin_id]
+    evt_df, reason = run_market_model(coin_df, cmc)
+
+    if evt_df is None:
+        coin_info = df[df["coin_id"] == coin_id][["coin_id", "symbol", "name"]].iloc[0]
+        excluded_coins.append({
+            "coin_id": coin_info["coin_id"],
+            "symbol": coin_info["symbol"],
+            "name": coin_info["name"],
+            "reason": reason
+        })
+        continue
+
+    evt_df["coin_id"] = coin_id
+    ar_all.append(evt_df)
+
+if ar_all:
+    ar_df = pd.concat(ar_all, ignore_index=True)
+    results_df, check_df = compute_aar_caar(ar_df)
+
+    results_df.to_excel(AAR_CAAR_XLSX, index=False)
     check_df.to_excel(CHECK_WINDOW_XLSX, index=False)
+
+    print(f"\nAAR/CAAR 結果已儲存至 {AAR_CAAR_XLSX}")
+    print(f"3 天檢查結果已儲存至 {CHECK_WINDOW_XLSX}")
     print("\n=== 事件日前後 3 天檢查 (AAR / CAAR / t-test) ===")
     print(check_df.to_string(index=False))
-
 else:
-    print("\nNo valid AR data generated.")
+    print("\n無有效 AR 數據。")
 
-# === 列出排除的幣種 ===
 if excluded_coins:
-    print("\n被排除的幣種:")
+    print("\n被排除的幣種：")
     df_excluded = pd.DataFrame(excluded_coins)
     print(df_excluded[["coin_id", "symbol", "name", "reason"]])
-else:
-    print("\n無幣種被排除。")

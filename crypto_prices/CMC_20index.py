@@ -11,7 +11,7 @@ event_date = datetime(2025, 7, 17)
 start_date = event_date - timedelta(days=150)
 end_date   = event_date + timedelta(days=30)
 
-url = "https://pro-api.coinmarketcap.com/v3/index/cmc100-historical"
+url = "https://pro-api.coinmarketcap.com/v3/index/cmc20-historical"
 headers = {
     "Accepts": "application/json",
     "X-CMC_PRO_API_KEY": API_KEY,
@@ -66,7 +66,7 @@ df["return"] = df["price"].pct_change()
 df["log_return"] = np.log(df["price"] / df["price"].shift(1))
 
 # === 5. 輸出 Excel ===
-output_path = r"C:\Users\Administrator\Desktop\論文\cryptodata\CMC100.xlsx"
+output_path = r"C:\Users\Administrator\Desktop\論文\cryptodata\CMC20.xlsx"
 df.to_excel(output_path, index=False)
 
 print(f"完成！共抓到 {len(df)} 筆資料，輸出到 {output_path}")
