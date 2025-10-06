@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 INPUT_DIR = r"C:\Users\Administrator\Desktop\論文\crypto_data2"
 INPUT_XLSX = f"{INPUT_DIR}/historical_data_2025-07-17_2.xlsx"
 CMC20_XLSX = r"C:\Users\Administrator\Desktop\論文\cryptodata\CMC20.xlsx"  # CMC20 指數檔案
-OUTPUT_DIR = INPUT_DIR
+OUTPUT_DIR = r"C:\Users\Administrator\Desktop\論文\crypto_data_cmc"
 AAR_CAAR_XLSX = f"{OUTPUT_DIR}/AAR_CAAR_results_2025-07-17_all_no_stablecoins_CMC20.xlsx"
 CHECK_WINDOW_XLSX = f"{OUTPUT_DIR}/AAR_CAAR_check_window_2025-07-17_all_no_stablecoins_CMC20.xlsx"
 EVENT_DATE = pd.to_datetime("2025-07-17")

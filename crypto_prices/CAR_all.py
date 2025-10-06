@@ -14,16 +14,15 @@ STABLECOIN_CLASS = "5. 穩定幣"
 
 # === 讀取數據 ===
 df = pd.read_excel(INPUT_XLSX)
-df["date"] = pd.to_datetime(df["date"])
-df["date"] = df["date"] - timedelta(days=1)  # 平移日期
+df["date"] = pd.to_datetime(df["date"]) - timedelta(days=1)  # 平移日期
 df = df.sort_values(["coin_id", "date"])
 df["rel_day"] = (df["date"] - EVENT_DATE).dt.days
 
 # 排除穩定幣
-non_stable_df = df[df["classification"] != STABLECOIN_CLASS]
+non_stable_df = df[df["classification"] != STABLECOIN_CLASS].copy()
 if non_stable_df.empty:
-    print(f"\n錯誤：排除 '{STABLECOIN_CLASS}' 後無數據！")
-    exit()
+    print(f"錯誤：排除 '{STABLECOIN_CLASS}' 後無數據！")
+    raise SystemExit
 print(f"\n排除穩定幣後包含 {non_stable_df['coin_id'].nunique()} 個幣種")
 
 # === 讀取 CMC20 指數 ===
@@ -35,7 +34,7 @@ print(cmc.tail())
 
 # === 事件研究法函數（計算 CAR） ===
 def run_market_model(coin_df, cmc_df, estimation_start=-150, estimation_end=-11, event_start=-3, event_end=3):
-    tmp = coin_df[["date", "log_return", "rel_day"]].rename(columns={"log_return": "ret"})
+    tmp = coin_df[["date", "log_return", "rel_day", "symbol", "name", "coin_id"]].rename(columns={"log_return": "ret"})
     tmp = tmp.merge(cmc_df, on="date", how="inner")
 
     # 估計期
@@ -47,7 +46,7 @@ def run_market_model(coin_df, cmc_df, estimation_start=-150, estimation_end=-11,
     X = sm.add_constant(est_df["mkt_return"])
     Y = est_df["ret"]
     try:
-        model = sm.OLS(Y, X).fit(cov_type="HC0")
+        model = sm.OLS(Y, X).fit()
         alpha, beta = model.params["const"], model.params["mkt_return"]
     except Exception as e:
         return None, None, f"Regression failed: {str(e)}"
@@ -61,64 +60,65 @@ def run_market_model(coin_df, cmc_df, estimation_start=-150, estimation_end=-11,
     evt_df["expected_ret"] = alpha + beta * evt_df["mkt_return"]
     evt_df["AR"] = evt_df["ret"] - evt_df["expected_ret"]
     car = evt_df["AR"].sum()
-
     return evt_df, car, None
 
 # === 主程式：計算 CAR 和控制變數 ===
-car_data = []
-excluded_coins = []
-
-for coin_id in non_stable_df["coin_id"].unique():
-    print(f"\n處理幣種: {coin_id}")
-    coin_df = non_stable_df[non_stable_df["coin_id"] == coin_id]
-
-    # 計算 CAR
-    evt_df, car, reason = run_market_model(coin_df, cmc, event_start=CAR_WINDOW[0], event_end=CAR_WINDOW[1])
+car_rows, excluded = [], []
+for cid, g in non_stable_df.groupby("coin_id"):
+    evt_df, car, reason = run_market_model(g, cmc, event_start=CAR_WINDOW[0], event_end=CAR_WINDOW[1])
     if evt_df is None:
-        coin_info = coin_df[["coin_id", "symbol", "name"]].iloc[0]
-        excluded_coins.append({
-            "coin_id": coin_info["coin_id"],
-            "symbol": coin_info["symbol"],
-            "name": coin_info["name"],
-            "reason": reason
-        })
+        coin_info = g[["coin_id", "symbol", "name"]].iloc[0]
+        excluded.append({"coin_id": coin_info["coin_id"], "symbol": coin_info["symbol"], "name": coin_info["name"], "reason": reason})
         continue
 
     # 控制變數
-    # 對數市值：t=0 或 t=-1 的 log_market_cap
-    event_day_data = coin_df[coin_df["rel_day"] == 0]
-    if event_day_data.empty:
-        event_day_data = coin_df[coin_df["rel_day"] == -1]
-    if not event_day_data.empty and "log_market_cap" in event_day_data.columns:
-        log_market_cap = event_day_data["log_market_cap"].iloc[0]
-    else:
-        log_market_cap = np.nan
+    # 對數市值：t=0 或 t=-1
+    ev = g[g["rel_day"] == 0]
+    if ev.empty:
+        ev = g[g["rel_day"] == -1]
+    log_mcap = ev["log_market_cap"].iloc[0] if ("log_market_cap" in g and not ev.empty) else np.nan
 
-    # 動能：t=-21 到 t=-1 的累積 log_return
-    momentum_period = coin_df[(coin_df["rel_day"] >= -24) & (coin_df["rel_day"] <= -4)]
-    momentum = momentum_period["log_return"].sum() if not momentum_period.empty else np.nan
+    # 動能：t=-10 到 t=-4 的累積 log_return（與Layer0/1一致）
+    mom_win = g[(g["rel_day"] >= -10) & (g["rel_day"] <= -4)]
+    momentum = mom_win["log_return"].sum() if not mom_win.empty else np.nan
 
-    car_data.append({
-        "coin_id": coin_id,
-        "symbol": coin_df["symbol"].iloc[0],
-        "name": coin_df["name"].iloc[0],
+    # ILLIQ：事件前 30 天平均（t=-33 到 t=-4）
+    illiq_win = g[(g["rel_day"] >= -33) & (g["rel_day"] <= -4)].copy()
+    illiq_win["ILLIQ"] = illiq_win["log_return"].abs() / (illiq_win["volume"] / 1000)
+    illiq = illiq_win["ILLIQ"].mean() if not illiq_win.empty else np.nan
+
+    # 波動率：事件前 30 天日報酬標準差（t=-10 到 t=-4）
+    pre30 = g[(g["rel_day"] >= -10) & (g["rel_day"] <= -4)]
+    vol30 = pre30["log_return"].std(ddof=1) if pre30["log_return"].count() >= 5 else np.nan
+
+    car_rows.append({
+        "coin_id": cid,
+        "symbol": g["symbol"].iloc[0],
+        "name": g["name"].iloc[0],
+        "classification": g["classification"].iloc[0],
         "CAR": car,
-        "log_market_cap": log_market_cap,
-        "momentum": momentum
+        "log_market_cap": log_mcap,
+        "momentum": momentum,
+        "ILLIQ": illiq,
+        "vol30": vol30
     })
 
-# 轉為 DataFrame
-car_df = pd.DataFrame(car_data)
+car_df = pd.DataFrame(car_rows)
+print(f"\n可用樣本數量：{len(car_df)}")
+if excluded:
+    print("\n被排除的幣（估計期不足/回歸失敗/事件窗無資料）：")
+    print(pd.DataFrame(excluded)[["coin_id", "symbol", "name", "reason"]].to_string(index=False))
+
 if car_df.empty:
-    print("\n無有效 CAR 數據，無法進行回歸！")
-    exit()
+    print("\n無有效 CAR 資料，無法回歸。")
+    raise SystemExit
 
 # 儲存 CAR 和控制變數
 CAR_XLSX = f"{OUTPUT_DIR}/CAR_control_variables_2025-07-17_all_coins_no_stablecoin.xlsx"
 car_df.to_excel(CAR_XLSX, index=False)
 print(f"\nCAR 和控制變數已儲存至 {CAR_XLSX}")
 print("\n=== CAR 和控制變數概覽 ===")
-print(car_df[["coin_id", "symbol", "CAR", "log_market_cap", "momentum"]].to_string(index=False))
+print(car_df[["coin_id", "symbol", "CAR", "log_market_cap", "momentum", "ILLIQ", "vol30"]].to_string(index=False))
 
 # === Winsorize 函數 ===
 def winsorize_series(series, lower=0.01, upper=0.99):
@@ -130,41 +130,50 @@ def winsorize_series(series, lower=0.01, upper=0.99):
     return series
 
 # 清理數據
-reg_df = car_df.dropna(subset=["CAR", "log_market_cap", "momentum"]).copy()
+reg_df = car_df.dropna(subset=["CAR", "log_market_cap", "momentum", "ILLIQ", "vol30"]).copy()
 #reg_df["CAR"] = winsorize_series(reg_df["CAR"], lower=0.01, upper=0.99)
 
 # === 橫斷面回歸 ===
+reg_df = car_df.dropna(subset=["CAR", "log_market_cap", "momentum", "ILLIQ", "vol30"]).copy()
 if len(reg_df) < 5:
-    print("\n有效數據過少（少於 5 個幣種），無法進行回歸！")
-else:
-    X = reg_df[["log_market_cap", "momentum"]]
-    X = sm.add_constant(X)
-    y = reg_df["CAR"]
+    print("\n有效樣本 < 5，無法進行穩健回歸。")
+    raise SystemExit
 
-    model = sm.OLS(y, X).fit(cov_type="HC0")
-    print("\n=== 橫斷面回歸結果 ===")
-    print(model.summary())
+X = sm.add_constant(reg_df[["log_market_cap", "momentum", "ILLIQ", "vol30"]])
+y = reg_df["CAR"]
+model = sm.OLS(y, X).fit(cov_type="HC0")
+print("\n=== 橫斷面回歸結果（排除穩定幣；HC0；未截尾） ===")
+print(model.summary())
 
-    # 儲存回歸結果
-    results = {
-        "variable": ["const", "log_market_cap", "momentum"],
-        "coefficient": model.params,
-        "t_value": model.tvalues,
-        "p_value": model.pvalues,
-        "r_squared": [model.rsquared] + [np.nan] * 2,
-        "r_squared_adj": [model.rsquared_adj] + [np.nan] * 2,
-        "N": [int(model.nobs)] + [np.nan] * 2,
-        "MSE": [model.mse_resid] + [np.nan] * 2
-    }
-    results_df = pd.DataFrame(results)
-    REG_XLSX = f"{OUTPUT_DIR}/cross_sectional_regression_2025-07-17_all_coins_no_stablecoin_cut.xlsx"
-    results_df.to_excel(REG_XLSX, index=False)
-    print(f"\n回歸結果已儲存至 {REG_XLSX}")
+# 儲存回歸結果
+results = {
+    "variable": ["const", "log_market_cap", "momentum", "ILLIQ", "vol30"],
+    "coefficient": model.params,
+    "std_err_HC0": model.bse,
+    "t_or_z": model.tvalues,
+    "p_value": model.pvalues,
+    "r_squared": [model.rsquared] + [np.nan] * 4,
+    "r_squared_adj": [model.rsquared_adj] + [np.nan] * 4,
+    "N": [int(model.nobs)] + [np.nan] * 4
+}
+reg_out = f"{OUTPUT_DIR}/crosssec_all_no_stablecoin_HC0_{EVENT_DATE.date()}_{CAR_WINDOW[0]}_{CAR_WINDOW[1]}.xlsx"
+pd.DataFrame(results).to_excel(reg_out, index=False)
+print(f"\n回歸結果已儲存至：{reg_out}")
 
-# === 列出排除的幣種 ===
-if excluded_coins:
+# 僅常數回歸（檢驗平均 CAR 是否顯著）
+only_c = sm.OLS(y, np.ones((len(y), 1))).fit(cov_type="HC0")
+print("\n=== 僅常數回歸（檢驗平均 CAR 是否顯著） ===")
+print(only_c.summary())
+
+# ==列出排除的幣種===
+
+if excluded:
     print("\n被排除的幣種:")
-    df_excluded = pd.DataFrame(excluded_coins)
+    df_excluded = pd.DataFrame(excluded)
     print(df_excluded[["coin_id", "symbol", "name", "reason"]])
 else:
     print("\n無幣種被排除。")
+
+
+corr_matrix = reg_df[["log_market_cap", "momentum", "ILLIQ", "vol30"]].corr()
+print("\n變數相關性矩陣：\n", corr_matrix)

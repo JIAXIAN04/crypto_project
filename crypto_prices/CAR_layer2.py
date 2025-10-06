@@ -10,8 +10,8 @@ INPUT_XLSX = f"{INPUT_DIR}/historical_data_2025-07-17_2.xlsx"
 CMC20_XLSX = r"C:\Users\Administrator\Desktop\論文\cryptodata\CMC20.xlsx"
 OUTPUT_DIR = r"C:\Users\Administrator\Desktop\論文\crypto_data_cmc"
 EVENT_DATE = pd.to_datetime("2025-07-17")
-CAR_WINDOW = (-3, 3)  # t=-3 到 t=3
-START_CLASS = '1. Layer0/1 區塊鏈基礎層'
+CAR_WINDOW = (-3, 3)  # t=0 到 t=5
+START_CLASS = '2. Layer2/3 擴展應用層代幣'
 
 # === 讀取個幣資料 ===
 df = pd.read_excel(INPUT_XLSX)
@@ -123,7 +123,7 @@ else:
     print(model.summary())
 
     # 輸出
-    CLASS_TAG = "Layer1"
+    CLASS_TAG = "Layer23"
     car_out = f"{OUTPUT_DIR}/CAR_{CLASS_TAG}_only_{EVENT_DATE.date()}_{CAR_WINDOW[0]}_{CAR_WINDOW[1]}.xlsx"
     reg_out = f"{OUTPUT_DIR}/crosssec_{CLASS_TAG}_HC0_{EVENT_DATE.date()}_{CAR_WINDOW[0]}_{CAR_WINDOW[1]}.xlsx"
     car_df.to_excel(car_out, index=False)
